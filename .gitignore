@@ -18,6 +18,10 @@
 # Output files from R CMD check
 /*.Rcheck/
 
+# large input data files
+data/**
+
+
 # RStudio files
 .Rproj.user/
 
