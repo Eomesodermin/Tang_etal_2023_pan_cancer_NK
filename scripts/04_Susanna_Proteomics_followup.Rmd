@@ -1,0 +1,785 @@
+---
+title: "Susanna_Proteomics_follow_up"
+author: "Dillon Corvino"
+date: "27/01/2025"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: united
+    highlight: tango
+    df_print: paged
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+Built with R version `r getRversion()`
+
+## Setup {.tabset}
+
+### Dataset information
+```{r Dataset_Info}
+
+# Data downloaded from 
+# https://zenodo.org/record/8275845
+
+
+```
+
+### Environment
+```{r setup}
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,  
+  eval = TRUE, 
+  tidy = TRUE
+)
+
+knitr::opts_knit$set(
+  root.dir = "../"
+)
+
+# Environment Set up
+rm(list = ls()) #Clean workspace
+cat("\014")     #Clean Console
+gc() # Free memory
+
+# Establish working directory
+library("rstudioapi")
+
+# Set working directory to source file location
+setwd(dirname(getActiveDocumentContext()$path))
+setwd("..")
+
+# pipeline variables
+long.compute <- FALSE
+long.load <- TRUE
+
+# load packages 
+library(SeuratDisk)
+library(Seurat)
+library(scCustomize)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+
+
+########################################
+# Parallelization of seurat functions
+########################################
+
+parallelization <- FALSE
+
+if(parallelization){
+  library(future)
+  # check the current active plan
+  plan()
+  
+  # detect cores
+  ncores <- parallel::detectCores()
+  ncores <- ncores-5
+  # set plan
+  plan("multisession", workers = ncores)
+  plan()
+  
+  # set max limit for global variables
+  # note this will drastically increase RAM usage, be aware of machine limits
+  # set value is in bites therefore 1000*1024^2 = 1GB Therefore set to 10GBs 
+  options(future.globals.maxSize = 10000 * 1024^2, 
+          future.rng.onMisuse="ignore") 
+}
+
+
+
+# Create output dir
+output.dir <- "results/susanna_proteomics/"
+
+if(!dir.exists(paste0(output.dir))){
+  dir.create(paste0(output.dir), 
+             recursive = T)
+}
+
+
+
+# colour scheme 
+batlow.pal <- usefulfunctions::Get.batlow()
+
+
+```
+
+## Load data {.tabset}
+
+
+### Read seurat files
+
+```{r read_data}
+
+if(long.load){
+  
+  # unsure what is contained within .*_blood.h5ad object, if this is just a subset or unique data
+  # regardless, will just use the fuller object for analysis
+  
+  # list files
+  #files.input <- list.files("data", pattern = "h5seurat", full.names = T)
+  
+  # Load files
+  #seurat.list <- lapply(files.input, LoadH5Seurat)
+  #names(seurat.list) <- c("object_1", "object_2")
+  
+  nk.seurat <- LoadH5Seurat("data/comb_CD56_CD16_NK.h5seurat")
+  
+  # format metadata 
+  nk.seurat@meta.data <- nk.seurat@meta.data %>%
+    mutate(tissue = ifelse(meta_tissue %in% c("Normal", "Others"), "non_tumor", as.character(meta_tissue)))
+  
+}
+
+```
+
+
+### Read in signature list
+```{r read_in_signature}
+
+DE.in.inhibitor.only <- read.delim("data/susanna_signatures/DE_in_inhibitor_only.txt", header = T)
+DE.in.inhibitor.only <- DE.in.inhibitor.only$gene.symbol
+head(DE.in.inhibitor.only)
+
+DE.in.vehicle.only <- read.delim("data/susanna_signatures/DE_in_vehicle_only.txt", header = T)
+DE.in.vehicle.only <- DE.in.vehicle.only$gene.symbol
+head(DE.in.vehicle.only)
+
+
+# Define input and output paths
+input.path  <- "data/susanna_signatures/"
+output.dir  <- "results/susanna_proteomics_goi/"
+dir.create(output.dir, showWarnings = FALSE)
+
+# Read gene lists into named list
+gene.list.files <- list.files(input.path, pattern = "\\.txt$", full.names = TRUE)
+
+gene.sets <- lapply(gene.list.files, function(f){
+  df <- read.table(f, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+  return(as.character(df[[1]]))  # grab first column regardless of name
+})
+
+names(gene.sets) <- basename(gene.list.files) |>
+  str_replace_all(" ", "_") |>
+  str_remove("\\.txt$")
+
+gene.sets
+
+```
+
+## Dataset visualisation {.tabset}
+
+
+### visualise genes of interest
+```{r vis_genes_of_interest}
+
+
+goi <- c("DGAT1", "DGAT2", "TMX1", "TMEM68")
+
+
+
+# plot feature plots, Density plots, and vlnplots genes of interest
+
+if(long.compute){
+  
+  
+  # Gene expression on UMAP
+  
+  for(i in seq_along(goi)){
+    
+    # feature plot
+    print(
+      FeaturePlot_scCustom(nk.seurat, 
+                           goi[i], 
+                           pt.size = 0.5)
+      
+    )
+    
+    dev.copy(pdf, paste0(output.dir, "FeaturePlot_", goi[i], ".pdf"))
+    dev.off()
+    
+    
+    # density plot
+    print(
+      Plot_Density_Custom(nk.seurat, 
+                          goi[i], 
+                          custom_palette = batlow.pal)
+    )
+    dev.copy(pdf, paste0(output.dir, "Densityplot_", goi[i], ".pdf"))
+    dev.off()
+    
+    
+    
+    
+    # Plot signature across categories
+    meta.data.vars <- c("meta_histology", "tissue", "Majortype", "celltype")
+    
+    for(j in seq_along(meta.data.vars)){
+      print(
+        VlnPlot_scCustom(nk.seurat,
+                         goi[i], 
+                         group.by = meta.data.vars[j],
+                         pt.size = 0.1) + NoLegend()
+      )
+      dev.copy(pdf, paste0(output.dir, "VlnPlot_", goi[i], "_", meta.data.vars[j], ".pdf"))
+      dev.off()
+      
+    }
+  }
+}
+
+
+# write plotting function 
+
+create_barplot <- function(contingency_table, plot_title, return_data = FALSE) {
+  # Calculate percentages
+  percentage_table <- sweep(contingency_table, 2, colSums(contingency_table), FUN = "/") * 100
+  
+  # Convert the result to a data frame
+  percentage_df <- as.data.frame(percentage_table)
+  
+  # Filter rows where 'Var1' is TRUE
+  filtered_df <- percentage_df %>%
+    filter(Var1 == TRUE)
+  
+  # Calculate the average frequency
+  average_freq <- mean(filtered_df$Freq)
+  
+  # Load the ggplot2 library
+  library(ggplot2)
+  
+  # Create the barplot with ordered data
+  plot <- ggplot(filtered_df, aes(x = reorder(Var2, -Freq), y = Freq)) +
+    geom_col(fill = "#112446") +
+    geom_hline(yintercept = average_freq, linetype = "dotted", color = "red") +  # Add a red dotted line
+    labs(x = "Category", 
+         y = "Frequency of each category", 
+         title = plot_title) +  # Use the input plot_title
+    coord_flip() +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5))
+  
+  if (return_data) {
+    return(filtered_df)
+  } else {
+    print(plot)
+    return(NULL)
+  }
+}
+
+
+
+
+# extract statistics and create barplots of score positive cell frequencies 
+
+if(long.compute){
+  
+  for(i in seq_along(goi)){
+    
+    
+    
+    goi.expression <- nk.seurat@assays$RNA@data[goi[i], ]
+    goi.logic <- goi.expression >= 0.5
+    
+    nk.seurat@meta.data$goistatus <- goi.logic
+    
+    
+    
+    meta.data.vars <- c("meta_histology", "tissue", "Majortype", "celltype")
+    for(j in seq_along(meta.data.vars)){
+      
+      
+      # Create a contingency table of 'sigstatus' and 'celltype'
+      contingency_table <- table(nk.seurat@meta.data$goistatus, 
+                                 nk.seurat@meta.data[[meta.data.vars[j]]])
+      
+      print(
+        create_barplot(contingency_table, meta.data.vars[j])
+      )
+      
+      dev.copy(pdf, paste0(output.dir, "Barplot_freq_of_cells_positive_for_", goi[i], "_across_", meta.data.vars[j], ".pdf"))
+      dev.off()
+      
+      
+      # export data
+      output.dataframe <- create_barplot(contingency_table, meta.data.vars[j], return_data = TRUE)
+      
+      write.csv(output.dataframe, paste0(output.dir, "Freq_of_cells_positive_for_", goi[i], "_across_", meta.data.vars[j], ".csv"))
+      
+      
+    }
+    
+    
+  }
+}
+
+
+```
+
+### Heatmap, vlnplot, densityplot, featureplot and % expression of gene sets of interest
+```{r gene_sets_of_interest_analysis}
+
+# Load necessary libraries
+library(Seurat)
+library(ggplot2)
+library(stringr)
+library(dplyr)
+
+
+
+# Create barplot function
+create_barplot <- function(contingency_table, plot_title, return_data = FALSE) {
+  percentage_table <- sweep(contingency_table, 2, colSums(contingency_table), FUN = "/") * 100
+  percentage_df <- as.data.frame(percentage_table)
+  filtered_df <- percentage_df %>% filter(Var1 == TRUE)
+  average_freq <- mean(filtered_df$Freq)
+  
+  plot <- ggplot(filtered_df, aes(x = reorder(Var2, -Freq), y = Freq)) +
+    geom_col(fill = "#112446") +
+    geom_hline(yintercept = average_freq, linetype = "dotted", color = "red") +
+    labs(x = "Category", y = "Frequency of each category", title = plot_title) +
+    coord_flip() +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5))
+  
+  if(return_data){
+    return(filtered_df)
+  } else {
+    print(plot)
+    return(NULL)
+  }
+}
+
+# Define input path for gene lists
+input.path <- "data/susanna_signatures/"
+gene.list.files <- list.files(input.path, pattern = "\\.txt$", full.names = TRUE)
+
+gene.sets <- lapply(gene.list.files, function(f){
+  df <- read.table(f, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+  return(as.character(df[[1]]))
+})
+
+names(gene.sets) <- basename(gene.list.files) |>
+  str_replace_all(" ", "_") |>
+  str_remove("\\.txt$")
+
+# Set default assay
+DefaultAssay(nk.seurat) <- "RNA"
+
+
+# create output dir 
+for(gene.set.name in names(gene.sets)){
+  
+  output.dir <- paste0("results/susanna_proteomics/", gene.set.name, "/")
+  
+  if (!dir.exists(output.dir)) {
+    dir.create(output.dir, recursive = TRUE)
+  }
+  
+}
+
+
+
+clusters.var <- c("Majortype", "meta_tissue")
+
+# heatmaps
+for(cluster.var in clusters.var){
+  
+  # Compute pseudobulk once per cluster var
+  pseudo.nk <- AggregateExpression(
+    nk.seurat,
+    assays        = "RNA",
+    return.seurat = TRUE,
+    group.by      = cluster.var
+  )
+  
+  Idents(pseudo.nk) <- cluster.var
+  
+  cluster_genes <- function(seurat_obj, gene_list) {
+    valid_genes <- intersect(gene_list, rownames(GetAssayData(seurat_obj, layer = "data")))
+    if(length(valid_genes) == 0){
+      warning("No valid genes found for clustering in ", cluster.var)
+      return(gene_list)
+    }
+    expression_matrix <- GetAssayData(seurat_obj, layer = "data")[valid_genes, , drop = FALSE]
+    dist_matrix <- dist(expression_matrix, method = "euclidean")
+    hc <- hclust(dist_matrix, method = "ward.D2")
+    ordered_genes <- valid_genes[hc$order]
+    return(ordered_genes)
+  }
+  
+  for(gene.set.name in names(gene.sets)){
+    
+    genes <- gene.sets[[gene.set.name]]
+    ordered_genes <- cluster_genes(pseudo.nk, genes)
+    
+    output.dir <- paste0("results/susanna_proteomics/", gene.set.name, "/")
+    
+    if(length(ordered_genes) > 0){
+      heat <- DoHeatmap(
+        pseudo.nk,
+        features    = ordered_genes,
+        draw.lines  = FALSE,
+        raster      = FALSE
+      ) +
+        scale_fill_gradient2(low = "blue", mid = "white", high = "red") +
+        ggtitle(paste("Pseudobulk heatmap:", gene.set.name))
+      
+      ggsave(
+        filename = paste0(output.dir, "Heatmap_", gene.set.name, "_", cluster.var, ".pdf"),
+        plot     = heat, width = 8, height = 10
+      )
+    } else {
+      warning("Skipping heatmap for ", gene.set.name, " in ", cluster.var, " (no valid genes).")
+    }
+    
+  }
+}
+
+
+# now for each gene set, show vlnplot, featureplot, densityplot and % of expression above 0.5
+for(gene.set.name in names(gene.sets)){
+  
+  genes <- gene.sets[[gene.set.name]]
+  output.dir <- paste0("results/susanna_proteomics/", gene.set.name, "/")
+  
+  for(gene in genes){
+    
+    # check if gene can be found, otherwise skip
+    valid_genes <- intersect(gene, rownames(GetAssayData(nk.seurat, layer = "data")))
+    if(length(valid_genes) == 0){
+      warning("Gene ", gene, " Not found, skipping to next gene")
+      next()
+    }
+
+
+
+    # FeaturePlot
+    fp <- FeaturePlot_scCustom(nk.seurat, gene, pt.size = 0.5)
+    ggsave(paste0(output.dir, "FeaturePlot_", gene, ".pdf"), fp)
+    
+    # Density plot
+    dp <- Plot_Density_Custom(nk.seurat, gene, custom_palette = batlow.pal)
+    ggsave(paste0(output.dir, "Densityplot_", gene, ".pdf"), dp)
+    
+    # VlnPlots
+    meta.data.vars <- c("meta_histology", "tissue", "Majortype", "celltype")
+    for(var in meta.data.vars){
+      vp <- VlnPlot_scCustom(nk.seurat, gene, group.by = var, pt.size = 0.1) + NoLegend()
+      ggsave(paste0(output.dir, "VlnPlot_", gene, "_", var, ".pdf"), vp)
+    }
+    
+    # Frequency-based barplots
+    goi.expression <- nk.seurat@assays$RNA@data[gene, ]
+    goi.logic <- goi.expression >= 0.5
+    nk.seurat@meta.data$goistatus <- goi.logic
+    
+    for(var in meta.data.vars){
+      contingency_table <- table(nk.seurat@meta.data$goistatus, nk.seurat@meta.data[[var]])
+      barplot.obj <- create_barplot(contingency_table, var)
+      dev.copy(pdf, paste0(output.dir, "Barplot_freq_of_cells_positive_for_", gene, "_across_", var, ".pdf"))
+      dev.off()
+      
+      output.dataframe <- create_barplot(contingency_table, var, return_data = TRUE)
+      write.csv(output.dataframe, paste0(output.dir, "Freq_of_cells_positive_for_", gene, "_across_", var, ".csv"))
+    }
+  }
+}
+
+
+
+
+```
+
+### Frequency of expression plots aggregated by sample and with stats 
+```{r freq_expression_plots}
+# Load necessary libraries
+library(Seurat)
+library(ggplot2)
+library(stringr)
+library(dplyr)
+library(ggpubr)
+
+# Create barplot function with ANOVA and posthoc
+plot_gene_expression_proportion <- function(seurat_obj, gene, group.var, threshold.val, out.dir, min.group.size = 0, y.axis.max = 110, xlabel.rotation = 90) {
+  expr.values <- GetAssayData(seurat_obj, assay = "RNA", slot = "data")[gene, ]
+  seurat_obj@meta.data[[paste0(gene, "_positive")]] <- expr.values >= threshold.val
+
+  plot_data <- seurat_obj@meta.data %>%
+    mutate(donor_id = .data$meta_patientID) %>%
+    group_by(donor_id, group = .data[[group.var]], gene_status = .data[[paste0(gene, "_positive")]]) %>%
+    summarise(freq = n(), .groups = "drop_last") %>%
+    ungroup() %>%
+    group_by(donor_id, group) %>%
+    mutate(prop = freq / sum(freq) * 100) %>%
+    filter(gene_status == TRUE)
+
+  # Filter groups by minimum donor size if required
+  if(min.group.size > 0){
+    group_counts <- plot_data %>% group_by(group) %>% summarise(n = n_distinct(donor_id))
+    valid_groups <- group_counts$group[group_counts$n >= min.group.size]
+    plot_data <- plot_data %>% filter(group %in% valid_groups)
+  }
+
+  # Ensure 'group' is a character/factor for plotting
+  plot_data$group <- as.factor(plot_data$group)
+
+  # Export raw calculated values
+  write.table(plot_data, file = paste0(out.dir, gene, "_", group.var, "_calculated_frequencies.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+
+  # Save ANOVA and posthoc stats
+  stats.outfile <- paste0(out.dir, gene, "_", group.var, "_ANOVA_posthoc.txt")
+  sink(stats.outfile)
+  aov.res <- aov(prop ~ group, data = plot_data)
+  print(summary(aov.res))
+  posthoc <- TukeyHSD(aov.res)
+  print(posthoc)
+  sink()
+
+  # Group combinations for t-tests
+  comparisons <- combn(levels(plot_data$group), 2, simplify = FALSE)
+
+  # n values
+  legend_data <- plot_data %>% group_by(group) %>% summarise(n = n_distinct(donor_id))
+  group.levels <- levels(plot_data$group)
+
+  plot <- ggplot(plot_data, aes(x = group, y = prop, color = group, fill = group)) +
+    geom_boxplot(alpha = 0.3, outlier.shape = NA, width = 0.75) +
+    geom_point(position = position_jitter(width = 0.1), shape = 19, size = 2) +
+    labs(x = group.var, y = paste0("% of ", gene, " positive cells")) +
+    theme_minimal() +
+    stat_compare_means(method = "anova", label.y = y.axis.max - 5) +
+    stat_compare_means(comparisons = comparisons, method = "t.test", label = "p.signif", hide.ns = FALSE) +
+    scale_y_continuous(expand = expansion(add = c(0, 1)), limits = c(0, y.axis.max)) +
+    scale_colour_manual(values = seq_along(group.levels),
+                        labels = paste(group.levels, " (n=", legend_data$n, ")", sep = ""),
+                        aesthetics = c("colour", "fill")) +
+    theme(axis.text.x = element_text(angle = xlabel.rotation, vjust = 0.5, hjust = 1)) +
+    ggtitle(paste("Proportion of", gene, "positive cells by", group.var))
+
+
+  ggsave(filename = paste0(out.dir, gene, "_", group.var, "_barplot.pdf"),
+         plot = plot, width = 7, height = 5)
+}
+
+# Define threshold and output directory
+threshold.val <- 0.5
+output.dir <- "results/susanna_dgat_quantification/"
+dir.create(output.dir, showWarnings = FALSE, recursive = TRUE)
+
+# Genes of interest
+goi <- c("DGAT1")
+
+# Analysis across tissue
+for(gene in goi){
+  plot_gene_expression_proportion(
+    seurat_obj  = nk.seurat,
+    gene        = gene,
+    group.var   = "tissue",
+    threshold.val = threshold.val,
+    out.dir     = output.dir,
+    xlabel.rotation = 90,
+    y.axis.max  = 100
+  )
+}
+
+# Analysis across Majortype
+for(gene in goi){
+  plot_gene_expression_proportion(
+    seurat_obj  = nk.seurat,
+    gene        = gene,
+    group.var   = "Majortype",
+    threshold.val = threshold.val,
+    out.dir     = output.dir,
+    xlabel.rotation = 90,
+    y.axis.max  = 100
+  )
+}
+
+# Analysis across meta_histology with filtering for min 10 donors
+for(gene in goi){
+  plot_gene_expression_proportion(
+    seurat_obj  = nk.seurat,
+    gene        = gene,
+    group.var   = "meta_histology",
+    threshold.val = threshold.val,
+    out.dir     = output.dir,
+    xlabel.rotation = 90,
+    min.group.size = 10,
+    y.axis.max  = 100
+  )
+}
+
+
+# note in output 
+#freq: number of cells in each donor–group combination that are either positive or negative for the gene.
+#prop: proportion (in %) of gene-positive cells in that group for each donor.
+```
+
+
+
+
+
+
+
+### Heatmaps genes of interest with row/gene clustering
+```{r goi_heatmaps_gene_clustered}
+
+# Set default assay
+DefaultAssay(nk.seurat) <- "RNA"
+
+clusters.var <- c("Majortype", "meta_tissue")
+
+for(cluster.var in clusters.var){
+  
+  # Compute pseudobulk once per cluster var
+  pseudo.nk <- AggregateExpression(
+    nk.seurat,
+    assays        = "RNA",
+    return.seurat = TRUE,
+    group.by      = cluster.var
+  )
+  
+  Idents(pseudo.nk) <- cluster.var
+  
+  cluster_genes <- function(seurat_obj, gene_list) {
+    valid_genes <- intersect(gene_list, rownames(GetAssayData(seurat_obj, layer = "data")))
+    if(length(valid_genes) == 0){
+      warning("No valid genes found for clustering in ", cluster.var)
+      return(gene_list)
+    }
+    expression_matrix <- GetAssayData(seurat_obj, layer = "data")[valid_genes, , drop = FALSE]
+    dist_matrix <- dist(expression_matrix, method = "euclidean")
+    hc <- hclust(dist_matrix, method = "ward.D2")
+    ordered_genes <- valid_genes[hc$order]
+    return(ordered_genes)
+  }
+  
+  for(gene.set.name in names(gene.sets)){
+    
+    genes <- gene.sets[[gene.set.name]]
+    ordered_genes <- cluster_genes(pseudo.nk, genes)
+    
+    if(length(ordered_genes) > 0){
+      heat <- DoHeatmap(
+        pseudo.nk,
+        features    = ordered_genes,
+        draw.lines  = FALSE,
+        raster      = FALSE
+      ) +
+        scale_fill_gradient2(low = "blue", mid = "white", high = "red") +
+        ggtitle(paste("Pseudobulk heatmap:", gene.set.name))
+      
+      ggsave(
+        filename = paste0(output.dir, "Heatmap_", gene.set.name, "_", cluster.var, ".pdf"),
+        plot     = heat, width = 8, height = 10
+      )
+    } else {
+      warning("Skipping heatmap for ", gene.set.name, " in ", cluster.var, " (no valid genes).")
+    }
+  }
+}
+
+
+
+
+
+```
+
+
+### heatmaps genes of interest
+```{r DEG_heatmaps}
+
+clusters.var <- c("Majortype", "meta_tissue")  # Annotation levels
+
+for (cluster.var in clusters.var) {
+  
+  # Replace "." with "_" in cluster.var for filenames and directories
+  cluster.var.clean <- gsub("\\.", "_", cluster.var)
+  
+  # Create output directory dynamically
+  output.dir <- paste0("results/Susanna_Proteomics_Signatures_", cluster.var.clean, "/")
+  
+  if (!dir.exists(output.dir)) {
+    dir.create(output.dir, recursive = TRUE)
+  }
+  
+  DefaultAssay(nk.seurat) <- "RNA"
+  
+  # Create pseudobulk for visualization
+  pseudo.nk <- AggregateExpression(nk.seurat, 
+                                   assays = "RNA",
+                                   return.seurat = TRUE,
+                                   group.by = cluster.var)
+  
+  # Set idents of pseudobulk object
+  Idents(pseudo.nk) <- cluster.var
+  
+  # Function to cluster genes using Ward's D2 and Euclidean distance
+  cluster_genes <- function(seurat_obj, gene_list) {
+    # Ensure only genes that exist in the dataset are used
+    valid_genes <- intersect(gene_list, rownames(GetAssayData(seurat_obj, layer = "data")))
+    
+    if (length(valid_genes) == 0) {
+      warning("No valid genes found for clustering in ", cluster.var)
+      return(gene_list)  # Return original order if no valid genes found
+    }
+    
+    # Extract expression matrix for selected genes
+    expression_matrix <- GetAssayData(seurat_obj, layer = "data")[valid_genes, , drop = FALSE]
+    
+    # Compute distance matrix (Euclidean)
+    dist_matrix <- dist(expression_matrix, method = "euclidean")
+    
+    # Perform hierarchical clustering using Ward.D2
+    hc <- hclust(dist_matrix, method = "ward.D2")
+    
+    # Order genes by clustering result
+    ordered_genes <- valid_genes[hc$order]
+    
+    return(ordered_genes)
+  }
+  
+  # Cluster genes for heatmaps (handle missing genes)
+  ordered_vehicle_genes <- cluster_genes(pseudo.nk, DE.in.vehicle.only)
+  ordered_inhibitor_genes <- cluster_genes(pseudo.nk, DE.in.inhibitor.only)
+  
+  # Heatmap of vehicle DEG signature (with clustering)
+  if (length(ordered_vehicle_genes) > 0) {
+    print(
+      DoHeatmap(pseudo.nk, 
+                features = ordered_vehicle_genes,  # Clustered gene order
+                draw.lines = FALSE, 
+                raster = FALSE)
+    )
+    
+    dev.copy(pdf, paste0(output.dir, "Heatmap_vehicle_DEG_signature_", cluster.var.clean, "_pseudobulk.pdf"))
+    dev.off()
+  } else {
+    warning("Skipping heatmap for vehicle genes in ", cluster.var, " (no valid genes).")
+  }
+  
+  # Heatmap of inhibitor DEG signature (with clustering)
+  if (length(ordered_inhibitor_genes) > 0) {
+    print(
+      DoHeatmap(pseudo.nk, 
+                features = ordered_inhibitor_genes,  # Clustered gene order
+                draw.lines = FALSE, 
+                raster = FALSE)
+    )
+    
+    dev.copy(pdf, paste0(output.dir, "Heatmap_inhibitor_DEG_signature_", cluster.var.clean, "_pseudobulk.pdf"))
+    dev.off()
+  } else {
+    warning("Skipping heatmap for inhibitor genes in ", cluster.var, " (no valid genes).")
+  }
+}
+
+```

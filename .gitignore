@@ -21,6 +21,8 @@
 # large input data files
 data/**
 
+# results
+results/**/**
 
 # RStudio files
 .Rproj.user/
