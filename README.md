@@ -28,11 +28,4 @@ Author: **Dillon Corvino**
 
 Built in a **Seurat**-based single-cell stack in **R** (`Seurat`, `dplyr`, `ggplot2`, and my helper package [`r-utility-functions`](https://github.com/Eomesodermin/r-utility-functions)).
 
-A pinned `renv.lock` is **not** committed for this repository. To capture an exact, reproducible
-environment, run in the project root:
-
-```r
-install.packages("renv")
-renv::init()        # discovers dependencies from the scripts
-renv::snapshot()    # writes renv.lock pinning every package version
-```
+No pinned `renv.lock` is committed; the packages listed above are the required dependencies.
